@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+/app/generated/prisma
+
+# project specific
+/uploads/
+/exports/
+/prisma/dev.db
+/prisma/dev.db-journal
+/python/__pycache__/

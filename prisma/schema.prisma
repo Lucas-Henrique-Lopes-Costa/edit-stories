@@ -1,0 +1,61 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Video {
+  id            String      @id @default(cuid())
+  originalName  String
+  fileName      String
+  filePath      String
+  status        String      @default("PENDING")
+  shortName     String?
+  shortNameAuto String?
+  duration      Float?
+  errorMessage  String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  transcription Transcription?
+  segments      Segment[]
+  exportJobs    ExportJob[]
+}
+
+model Transcription {
+  id        String   @id @default(cuid())
+  videoId   String   @unique
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  rawText   String
+  language  String?
+  createdAt DateTime @default(now())
+}
+
+model Segment {
+  id           String   @id @default(cuid())
+  videoId      String
+  video        Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  index        Int
+  startTime    Float
+  endTime      Float
+  originalText String
+  editedText   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([videoId, index])
+}
+
+model ExportJob {
+  id         String   @id @default(cuid())
+  videoId    String
+  video      Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  status     String   @default("PENDING")
+  outputPath String?
+  error      String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}

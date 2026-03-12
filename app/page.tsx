@@ -1,64 +1,255 @@
-import Image from "next/image";
+"use client";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { VideoCard } from "@/components/VideoCard";
+import { UploadZone } from "@/components/UploadZone";
+import { VideoWithRelations, VideoStatus } from "@/lib/types";
+
+// "Processando" cobre TRANSCRIBING e GENERATING
+const PROCESSING_STATUSES = ["TRANSCRIBING", "GENERATING"];
+
+type FilterValue = VideoStatus | "ALL" | "PROCESSING";
+
+const STATUS_FILTERS: { label: string; value: FilterValue }[] = [
+  { label: "Todos", value: "ALL" },
+  { label: "Aguardando", value: "PENDING" },
+  { label: "Processando", value: "PROCESSING" },
+  { label: "Para revisão", value: "READY" },
+  { label: "Aprovados", value: "APPROVED" },
+  { label: "Exportados", value: "EXPORTED" },
+  { label: "Erro", value: "ERROR" },
+];
 
 export default function Home() {
+  const [videos, setVideos] = useState<VideoWithRelations[]>([]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [filter, setFilter] = useState<FilterValue>("ALL");
+  const [loading, setLoading] = useState(true);
+
+  const fetchVideos = useCallback(async () => {
+    // Always fetch ALL from server; filter client-side to avoid race conditions
+    const res = await fetch("/api/videos");
+    const data = await res.json();
+    setVideos(data.videos ?? []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    fetchVideos();
+    const interval = setInterval(fetchVideos, 5000);
+    return () => clearInterval(interval);
+  }, [fetchVideos]);
+
+  const filtered = useMemo(() => {
+    if (filter === "ALL") return videos;
+    if (filter === "PROCESSING") return videos.filter((v) => PROCESSING_STATUSES.includes(v.status));
+    return videos.filter((v) => v.status === filter);
+  }, [videos, filter]);
+
+  const handleUploaded = useCallback(async (ids: string[]) => {
+    await fetch("/api/process", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoIds: ids }),
+    });
+    fetchVideos();
+  }, [fetchVideos]);
+
+  const handleApprove = useCallback(async (id: string) => {
+    await fetch(`/api/videos/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "APPROVED" }),
+    });
+    fetchVideos();
+  }, [fetchVideos]);
+
+  const handleReprocess = useCallback(async (id: string) => {
+    await fetch("/api/process", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoIds: [id] }),
+    });
+    fetchVideos();
+  }, [fetchVideos]);
+
+  const handleBackToEdit = useCallback(async (id: string) => {
+    await fetch(`/api/videos/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: "READY" }),
+    });
+    fetchVideos();
+  }, [fetchVideos]);
+
+  const handleDelete = useCallback(async (id: string) => {
+    await fetch(`/api/videos/${id}`, { method: "DELETE" });
+    setSelected((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    fetchVideos();
+  }, [fetchVideos]);
+
+  const handleSelect = useCallback((id: string, checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
+
+  const handleSelectAll = useCallback(() => {
+    setSelected((prev) =>
+      prev.size === filtered.length
+        ? new Set()
+        : new Set(filtered.map((v) => v.id))
+    );
+  }, [filtered]);
+
+  const handleExportSelected = useCallback(async () => {
+    const ids = Array.from(selected).filter(
+      (id) => videos.find((v) => v.id === id)?.status === "APPROVED"
+    );
+    if (ids.length === 0) return alert("Selecione apenas vídeos aprovados para exportar.");
+    await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoIds: ids }),
+    });
+    setSelected(new Set());
+    fetchVideos();
+  }, [selected, videos, fetchVideos]);
+
+  const handleDownloadSelected = useCallback(() => {
+    const exportedIds = Array.from(selected).filter(
+      (id) => videos.find((v) => v.id === id)?.status === "EXPORTED"
+    );
+    if (exportedIds.length === 0) return;
+    // Trigger downloads with a small delay to avoid browser blocking
+    exportedIds.forEach((id, i) => {
+      setTimeout(() => {
+        const a = document.createElement("a");
+        a.href = `/api/download/${id}`;
+        a.download = "";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }, i * 400);
+    });
+  }, [selected, videos]);
+
+  const selectedVideos = useMemo(
+    () => Array.from(selected).map((id) => videos.find((v) => v.id === id)).filter(Boolean) as VideoWithRelations[],
+    [selected, videos]
+  );
+  const hasExportedSelected = selectedVideos.some((v) => v.status === "EXPORTED");
+  const hasApprovedSelected = selectedVideos.some((v) => v.status === "APPROVED");
+
+  const approvedCount = videos.filter((v) => v.status === "APPROVED").length;
+  const readyCount = videos.filter((v) => v.status === "READY").length;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+    <div className="min-h-screen bg-zinc-950 text-white">
+      <header className="border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold">Edit Stories</h1>
+          <p className="text-xs text-zinc-500">Legendagem e exportação em massa</p>
+        </div>
+        <div className="flex items-center gap-3 text-sm text-zinc-400">
+          {readyCount > 0 && <span className="text-yellow-400">{readyCount} para revisar</span>}
+          {approvedCount > 0 && <span className="text-green-400">{approvedCount} aprovado(s)</span>}
+        </div>
+      </header>
+
+      <main className="max-w-4xl mx-auto px-6 py-8 flex flex-col gap-6">
+        <UploadZone onUploaded={handleUploaded} />
+
+        {videos.length > 0 && (
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            {/* Filters */}
+            <div className="flex gap-2 flex-wrap">
+              {STATUS_FILTERS.map((f) => {
+                const count =
+                  f.value === "ALL"
+                    ? videos.length
+                    : f.value === "PROCESSING"
+                    ? videos.filter((v) => PROCESSING_STATUSES.includes(v.status)).length
+                    : videos.filter((v) => v.status === f.value).length;
+
+                return (
+                  <button
+                    key={f.value}
+                    onClick={() => setFilter(f.value)}
+                    className={`text-xs px-3 py-1.5 rounded-full transition-colors flex items-center gap-1.5 ${
+                      filter === f.value
+                        ? "bg-blue-600 text-white"
+                        : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                    }`}
+                  >
+                    {f.label}
+                    {count > 0 && (
+                      <span className={`text-[10px] rounded-full px-1.5 py-0 ${filter === f.value ? "bg-blue-500" : "bg-zinc-700"}`}>
+                        {count}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Batch actions */}
+            <div className="flex gap-2 flex-wrap">
+              {filtered.length > 0 && (
+                <button
+                  onClick={handleSelectAll}
+                  className="text-xs px-3 py-1.5 bg-zinc-800 text-zinc-400 hover:bg-zinc-700 rounded transition-colors"
+                >
+                  {selected.size === filtered.length ? "Desmarcar todos" : "Selecionar todos"}
+                </button>
+              )}
+              {hasApprovedSelected && (
+                <button
+                  onClick={handleExportSelected}
+                  className="text-xs px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white rounded transition-colors"
+                >
+                  Exportar selecionados ({selectedVideos.filter((v) => v.status === "APPROVED").length})
+                </button>
+              )}
+              {hasExportedSelected && (
+                <button
+                  onClick={handleDownloadSelected}
+                  className="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded transition-colors"
+                >
+                  Baixar selecionados ({selectedVideos.filter((v) => v.status === "EXPORTED").length})
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {loading ? (
+          <p className="text-zinc-500 text-sm">Carregando...</p>
+        ) : filtered.length === 0 ? (
+          <p className="text-zinc-600 text-sm text-center py-12">
+            {videos.length === 0
+              ? "Nenhum vídeo ainda. Faça upload para começar."
+              : "Nenhum vídeo com este filtro."}
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            {filtered.map((video) => (
+              <VideoCard
+                key={video.id}
+                video={video}
+                selected={selected.has(video.id)}
+                onSelect={handleSelect}
+                onApprove={handleApprove}
+                onReprocess={handleReprocess}
+                onDelete={handleDelete}
+                onBackToEdit={handleBackToEdit}
+              />
+            ))}
+          </div>
+        )}
       </main>
     </div>
   );
