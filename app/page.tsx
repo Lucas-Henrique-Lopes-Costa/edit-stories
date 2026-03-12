@@ -88,6 +88,14 @@ export default function Home() {
     fetchVideos();
   }, [fetchVideos]);
 
+  const handleDeleteSelected = useCallback(async () => {
+    const ids = Array.from(selected);
+    if (!confirm(`Excluir ${ids.length} vídeo(s) selecionado(s)? Esta ação não pode ser desfeita.`)) return;
+    await Promise.all(ids.map((id) => fetch(`/api/videos/${id}`, { method: "DELETE" })));
+    setSelected(new Set());
+    fetchVideos();
+  }, [selected, fetchVideos]);
+
   const handleSelect = useCallback((id: string, checked: boolean) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -220,6 +228,14 @@ export default function Home() {
                   className="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded transition-colors"
                 >
                   Baixar selecionados ({selectedVideos.filter((v) => v.status === "EXPORTED").length})
+                </button>
+              )}
+              {selected.size > 0 && (
+                <button
+                  onClick={handleDeleteSelected}
+                  className="text-xs px-3 py-1.5 border border-zinc-700 hover:border-red-500 hover:text-red-400 text-zinc-500 rounded transition-colors"
+                >
+                  Excluir selecionados ({selected.size})
                 </button>
               )}
             </div>
