@@ -10,6 +10,7 @@ export async function GET(req: NextRequest) {
     include: {
       transcription: { select: { id: true, language: true } },
       exportJobs: { orderBy: { createdAt: "desc" }, take: 1 },
+      products: { include: { product: true } },
     },
     orderBy: { createdAt: "desc" },
   });

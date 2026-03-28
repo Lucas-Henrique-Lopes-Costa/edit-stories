@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { VideoCard } from "@/components/VideoCard";
 import { UploadZone } from "@/components/UploadZone";
-import { VideoWithRelations, VideoStatus } from "@/lib/types";
+import { VideoWithRelations, VideoStatus, Product } from "@/lib/types";
 
 // "Processando" cobre TRANSCRIBING e GENERATING
 const PROCESSING_STATUSES = ["TRANSCRIBING", "GENERATING"];
@@ -24,27 +24,60 @@ export default function Home() {
   const [videos, setVideos] = useState<VideoWithRelations[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<FilterValue>("ALL");
+  const [productFilter, setProductFilter] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Products state
+  const [products, setProducts] = useState<Product[]>([]);
+  const [newProductName, setNewProductName] = useState("");
+  const [showProducts, setShowProducts] = useState(false);
+  const newProductRef = useRef<HTMLInputElement>(null);
+
   const fetchVideos = useCallback(async () => {
-    // Always fetch ALL from server; filter client-side to avoid race conditions
     const res = await fetch("/api/videos");
     const data = await res.json();
     setVideos(data.videos ?? []);
     setLoading(false);
   }, []);
 
+  const fetchProducts = useCallback(async () => {
+    const res = await fetch("/api/products");
+    const data = await res.json();
+    setProducts(data.products ?? []);
+  }, []);
+
+  const handleAddProduct = useCallback(async () => {
+    const name = newProductName.trim();
+    if (!name) return;
+    await fetch("/api/products", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    setNewProductName("");
+    fetchProducts();
+    newProductRef.current?.focus();
+  }, [newProductName, fetchProducts]);
+
+  const handleDeleteProduct = useCallback(async (id: string) => {
+    await fetch(`/api/products/${id}`, { method: "DELETE" });
+    fetchProducts();
+  }, [fetchProducts]);
+
   useEffect(() => {
     fetchVideos();
+    fetchProducts();
     const interval = setInterval(fetchVideos, 5000);
     return () => clearInterval(interval);
-  }, [fetchVideos]);
+  }, [fetchVideos, fetchProducts]);
 
   const filtered = useMemo(() => {
-    if (filter === "ALL") return videos;
-    if (filter === "PROCESSING") return videos.filter((v) => PROCESSING_STATUSES.includes(v.status));
-    return videos.filter((v) => v.status === filter);
-  }, [videos, filter]);
+    let result = videos;
+    if (filter === "PROCESSING") result = result.filter((v) => PROCESSING_STATUSES.includes(v.status));
+    else if (filter !== "ALL") result = result.filter((v) => v.status === filter);
+    if (productFilter) result = result.filter((v) => v.products?.some((vp) => vp.product.id === productFilter));
+    return result;
+  }, [videos, filter, productFilter]);
 
   const handleUploaded = useCallback(async (ids: string[]) => {
     await fetch("/api/process", {
@@ -87,6 +120,20 @@ export default function Home() {
     setSelected((prev) => { const n = new Set(prev); n.delete(id); return n; });
     fetchVideos();
   }, [fetchVideos]);
+
+  const handleChangeStatusSelected = useCallback(async (status: string) => {
+    const ids = Array.from(selected);
+    await Promise.all(
+      ids.map((id) =>
+        fetch(`/api/videos/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status }),
+        })
+      )
+    );
+    fetchVideos();
+  }, [selected, fetchVideos]);
 
   const handleDeleteSelected = useCallback(async () => {
     const ids = Array.from(selected);
@@ -162,14 +209,64 @@ export default function Home() {
           <h1 className="text-lg font-semibold">Edit Stories</h1>
           <p className="text-xs text-zinc-500">Legendagem e exportação em massa</p>
         </div>
-        <div className="flex items-center gap-3 text-sm text-zinc-400">
+        <div className="flex items-center gap-4 text-sm text-zinc-400">
           {readyCount > 0 && <span className="text-yellow-400">{readyCount} para revisar</span>}
           {approvedCount > 0 && <span className="text-green-400">{approvedCount} aprovado(s)</span>}
+          <a href="/analytics" className="text-zinc-400 hover:text-white transition-colors border border-zinc-700 hover:border-zinc-500 px-3 py-1.5 rounded text-xs">
+            Analytics
+          </a>
         </div>
       </header>
 
       <main className="max-w-4xl mx-auto px-6 py-8 flex flex-col gap-6">
         <UploadZone onUploaded={handleUploaded} />
+
+        {/* Products management */}
+        <div className="border border-zinc-800 rounded-lg bg-zinc-900">
+          <button
+            onClick={() => setShowProducts((v) => !v)}
+            className="w-full flex items-center justify-between px-4 py-3 text-sm text-zinc-300 hover:text-white transition-colors"
+          >
+            <span className="font-medium">Produtos {products.length > 0 && <span className="text-zinc-500 font-normal">({products.length})</span>}</span>
+            <span className="text-zinc-600">{showProducts ? "▲" : "▼"}</span>
+          </button>
+          {showProducts && (
+            <div className="px-4 pb-4 border-t border-zinc-800 pt-3 flex flex-col gap-3">
+              {products.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {products.map((p) => (
+                    <span key={p.id} className="flex items-center gap-1.5 text-xs bg-indigo-900/50 text-indigo-300 border border-indigo-700/40 px-2.5 py-1 rounded-full">
+                      {p.name}
+                      <button
+                        onClick={() => handleDeleteProduct(p.id)}
+                        className="text-indigo-500 hover:text-red-400 transition-colors leading-none"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <input
+                  ref={newProductRef}
+                  type="text"
+                  value={newProductName}
+                  onChange={(e) => setNewProductName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleAddProduct(); }}
+                  placeholder="Nome do produto..."
+                  className="flex-1 text-xs bg-zinc-800 text-white px-3 py-1.5 rounded border border-zinc-700 focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  onClick={handleAddProduct}
+                  className="text-xs px-3 py-1.5 bg-indigo-700 hover:bg-indigo-600 text-white rounded transition-colors"
+                >
+                  Adicionar
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
 
         {videos.length > 0 && (
           <div className="flex items-center justify-between gap-4 flex-wrap">
@@ -204,6 +301,32 @@ export default function Home() {
               })}
             </div>
 
+            {/* Product filter */}
+            {products.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-zinc-600">Produto:</span>
+                <button
+                  onClick={() => setProductFilter(null)}
+                  className={`text-xs px-3 py-1 rounded-full transition-colors ${
+                    productFilter === null ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                  }`}
+                >
+                  Todos
+                </button>
+                {products.map((p) => (
+                  <button
+                    key={p.id}
+                    onClick={() => setProductFilter(productFilter === p.id ? null : p.id)}
+                    className={`text-xs px-3 py-1 rounded-full transition-colors ${
+                      productFilter === p.id ? "bg-indigo-600 text-white" : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                    }`}
+                  >
+                    {p.name}
+                  </button>
+                ))}
+              </div>
+            )}
+
             {/* Batch actions */}
             <div className="flex gap-2 flex-wrap">
               {filtered.length > 0 && (
@@ -229,6 +352,23 @@ export default function Home() {
                 >
                   Baixar selecionados ({selectedVideos.filter((v) => v.status === "EXPORTED").length})
                 </button>
+              )}
+              {selected.size > 0 && (
+                <select
+                  defaultValue=""
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      handleChangeStatusSelected(e.target.value);
+                      e.target.value = "";
+                    }
+                  }}
+                  className="text-xs px-3 py-1.5 bg-zinc-800 text-zinc-300 hover:bg-zinc-700 rounded transition-colors cursor-pointer border border-zinc-700"
+                >
+                  <option value="" disabled>Mover para etapa...</option>
+                  <option value="PENDING">Aguardando</option>
+                  <option value="READY">Para revisão</option>
+                  <option value="APPROVED">Aprovado</option>
+                </select>
               )}
               {selected.size > 0 && (
                 <button
@@ -257,11 +397,13 @@ export default function Home() {
                 key={video.id}
                 video={video}
                 selected={selected.has(video.id)}
+                allProducts={products}
                 onSelect={handleSelect}
                 onApprove={handleApprove}
                 onReprocess={handleReprocess}
                 onDelete={handleDelete}
                 onBackToEdit={handleBackToEdit}
+                onProductsChanged={fetchVideos}
               />
             ))}
           </div>

@@ -20,7 +20,7 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "..", "prisma", "dev.db")
 EXPORTS_DIR = os.path.join(os.path.dirname(__file__), "..", "exports")
 
 # Subtitle visual config — keep in sync with lib/subtitle-config.ts
-FONT_SIZE = 36
+FONT_SIZE_RATIO = 72 / 1920  # font size as fraction of video height (~3.75%)
 PADDING_X = 22
 PADDING_Y = 12
 BORDER_RADIUS = 10
@@ -55,6 +55,8 @@ def update_video(conn, video_id, status):
 
 
 def get_video_dimensions(file_path):
+    """Return the DISPLAY dimensions of the video, accounting for rotation metadata.
+    iPhone/Android videos are often stored landscape with a 90° rotation tag."""
     result = subprocess.run(
         [
             "ffprobe", "-v", "quiet",
@@ -65,9 +67,30 @@ def get_video_dimensions(file_path):
     )
     info = json.loads(result.stdout)
     for stream in info.get("streams", []):
-        if stream.get("codec_type") == "video":
-            return stream["width"], stream["height"]
-    return 1920, 1080
+        if stream.get("codec_type") != "video":
+            continue
+        w = stream["width"]
+        h = stream["height"]
+
+        # Check rotation metadata — iPhone stores portrait as landscape + rotate 90/270
+        rotation = 0
+        tags = stream.get("tags", {})
+        if "rotate" in tags:
+            rotation = abs(int(tags["rotate"]))
+
+        # Also check side_data_list (newer ffprobe format)
+        for sd in stream.get("side_data_list", []):
+            if sd.get("side_data_type") == "Display Matrix":
+                rot = abs(int(sd.get("rotation", 0)))
+                if rot:
+                    rotation = rot
+
+        # Swap dimensions for 90° or 270° rotation so subtitle math uses display size
+        if rotation in (90, 270):
+            w, h = h, w
+
+        return w, h
+    return 1080, 1920  # default to portrait
 
 
 def find_font():
@@ -106,16 +129,20 @@ def wrap_text(text, font, max_width, draw):
     return lines
 
 
-def render_subtitle_png(text, video_w, video_h, out_path):
-    """Render subtitle text as a transparent PNG at full video resolution."""
+def render_subtitle_png(text, video_w, video_h, out_path, vertical_ratio=VERTICAL_CENTER_RATIO, font_size_ratio=FONT_SIZE_RATIO):
+    """Render subtitle text as a transparent PNG at full video resolution.
+    font_size_ratio is a fraction of video height, so the text scales with resolution.
+    """
     from PIL import Image, ImageDraw, ImageFont
+
+    font_size = max(8, int(video_h * font_size_ratio))
 
     img = Image.new("RGBA", (video_w, video_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
 
     font_path = find_font()
     try:
-        font = ImageFont.truetype(font_path, FONT_SIZE) if font_path else ImageFont.load_default()
+        font = ImageFont.truetype(font_path, font_size) if font_path else ImageFont.load_default()
     except Exception:
         font = ImageFont.load_default()
 
@@ -136,8 +163,8 @@ def render_subtitle_png(text, video_w, video_h, out_path):
     box_h = block_h + PADDING_Y * 2
 
     box_x = (video_w - box_w) // 2
-    # Center the box at VERTICAL_CENTER_RATIO from the top
-    box_y = int(video_h * VERTICAL_CENTER_RATIO) - box_h // 2
+    # Center the box at vertical_ratio from the top (per-video override)
+    box_y = int(video_h * vertical_ratio) - box_h // 2
 
     # Draw rounded rectangle background
     draw.rounded_rectangle(
@@ -218,11 +245,17 @@ def main():
         ).fetchall()
         segments = [dict(r) for r in rows]
 
-        # Output file name
+        # Load video metadata
         row = conn.execute(
-            "SELECT shortName, shortNameAuto, originalName FROM Video WHERE id=?",
+            "SELECT shortName, shortNameAuto, originalName, subtitlePosition, trimStart, trimEnd FROM Video WHERE id=?",
             (video_id,),
         ).fetchone()
+
+        vertical_ratio = row["subtitlePosition"] if row["subtitlePosition"] is not None else VERTICAL_CENTER_RATIO
+        font_size_ratio = FONT_SIZE_RATIO
+        trim_start = float(row["trimStart"] or 0)
+        trim_end   = float(row["trimEnd"]) if row["trimEnd"] is not None else None
+
         base_name = (
             (row["shortName"] or row["shortNameAuto"] or row["originalName"])
             .replace(" ", "_")
@@ -235,31 +268,56 @@ def main():
         video_w, video_h = get_video_dimensions(file_path)
         print(f"[exporter] Video dimensions: {video_w}x{video_h}", file=sys.stderr)
 
+        # Shift segment timestamps to match trimmed video (input-level -ss remaps t to 0)
+        trimmed_segments = []
+        for seg in segments:
+            s = seg["startTime"] - trim_start
+            e = seg["endTime"]   - trim_start
+            if trim_end is not None:
+                duration = trim_end - trim_start
+                if s >= duration:
+                    continue
+                e = min(e, duration)
+            if e <= 0:
+                continue
+            trimmed_segments.append({**seg, "startTime": max(0, s), "endTime": e})
+
         # Render subtitle PNGs
-        print(f"[exporter] Rendering {len(segments)} subtitle images...", file=sys.stderr)
-        for i, seg in enumerate(segments):
+        effective_font_px = max(8, int(video_h * font_size_ratio))
+        print(f"[exporter] Rendering {len(trimmed_segments)} subtitle images "
+              f"(pos={vertical_ratio:.2f}, trim={trim_start:.1f}-{trim_end or 'end'}, "
+              f"font={effective_font_px}px)...", file=sys.stderr)
+        for i, seg in enumerate(trimmed_segments):
             text = (seg["editedText"] or seg["originalText"]).strip()
             png_path = os.path.join(tmp_dir, f"sub_{i:04d}.png")
-            render_subtitle_png(text, video_w, video_h, png_path)
+            render_subtitle_png(text, video_w, video_h, png_path, vertical_ratio, font_size_ratio)
 
-        # Build filter_complex
-        filter_str, extra_inputs = build_filter_complex(segments, tmp_dir, video_w, video_h)
+        # Build filter_complex with trimmed segments
+        filter_str, extra_inputs = build_filter_complex(trimmed_segments, tmp_dir, video_w, video_h)
 
-        # Run FFmpeg
+        # Build FFmpeg command — input-level seek for fast trim
+        ffmpeg_input = ["ffmpeg", "-y"]
+        if trim_start > 0:
+            ffmpeg_input += ["-ss", str(trim_start)]
+        ffmpeg_input += ["-i", file_path]
+
+        output_trim = []
+        if trim_end is not None:
+            output_trim = ["-t", str(trim_end - trim_start)]
+
         cmd = (
-            ["ffmpeg", "-y", "-i", file_path]
+            ffmpeg_input
             + extra_inputs
-            + [
-                "-filter_complex", filter_str,
-                "-map", "[vout]",
-                "-map", "0:a?",
-                "-c:v", "libx264",
-                "-crf", "18",
-                "-preset", "fast",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                output_path,
-            ]
+            + ["-filter_complex", filter_str,
+               "-map", "[vout]",
+               "-map", "0:a?"]
+            + output_trim
+            + ["-c:v", "libx264",
+               "-crf", "18",
+               "-preset", "fast",
+               "-c:a", "aac",
+               "-b:a", "192k",
+               output_path]
         )
 
         print(f"[exporter] Running FFmpeg...", file=sys.stderr)

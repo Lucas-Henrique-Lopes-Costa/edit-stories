@@ -16,13 +16,47 @@ model Video {
   shortName     String?
   shortNameAuto String?
   duration      Float?
-  errorMessage  String?
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
+  errorMessage      String?
+  subtitlePosition  Float   @default(0.75)   // vertical center ratio 0=top 1=bottom
+  fontSize          Float   @default(0.01875) // font size as fraction of video height
+  trimStart         Float   @default(0)       // trim start in seconds
+  trimEnd           Float?                    // trim end in seconds (null = full duration)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
   transcription Transcription?
   segments      Segment[]
   exportJobs    ExportJob[]
+  products      VideoProduct[]
+  metrics       VideoMetrics?
+}
+
+model VideoMetrics {
+  id            String   @id @default(cuid())
+  videoId       String   @unique
+  video         Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  investedValue Float?   // Valor investido (R$)
+  salesValue    Float?   // Valor de vendas (R$)
+  salesCount    Int?     // Número de vendas
+  impressions   Int?     // Impressões
+  reach         Int?     // Alcance
+  updatedAt     DateTime @updatedAt
+}
+
+model Product {
+  id        String         @id @default(cuid())
+  name      String         @unique
+  createdAt DateTime       @default(now())
+  videos    VideoProduct[]
+}
+
+model VideoProduct {
+  videoId   String
+  productId String
+  video     Video   @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@id([videoId, productId])
 }
 
 model Transcription {

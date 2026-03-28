@@ -1,3 +1,20 @@
+export interface VideoMetrics {
+  id: string;
+  videoId: string;
+  investedValue: number | null;
+  salesValue: number | null;
+  salesCount: number | null;
+  impressions: number | null;
+  reach: number | null;
+  updatedAt: string;
+}
+
+export interface Product {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
 export type VideoStatus =
   | "PENDING"
   | "TRANSCRIBING"
@@ -20,8 +37,13 @@ export interface VideoWithRelations {
   shortNameAuto: string | null;
   duration: number | null;
   errorMessage: string | null;
+  subtitlePosition: number;
+  fontSize: number;
+  trimStart: number;
+  trimEnd: number | null;
   createdAt: string;
   updatedAt: string;
+  products?: { product: Product }[];
   transcription?: {
     id: string;
     rawText: string;

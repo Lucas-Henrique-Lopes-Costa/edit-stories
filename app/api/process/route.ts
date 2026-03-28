@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { spawn } from "child_process";
-import path from "path";
+import { enqueueVideos, getQueueStatus } from "@/lib/worker-queue";
 
-// POST /api/process — enqueue videos for processing
+// POST /api/process — add videos to the processing queue (max 2 run at a time)
 // body: { videoIds: string[] }
 export async function POST(req: NextRequest) {
   const { videoIds } = await req.json() as { videoIds: string[] };
@@ -12,25 +11,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "No videoIds provided" }, { status: 400 });
   }
 
-  // Mark all as TRANSCRIBING immediately
+  // Clear error message for videos being requeued; leave status as PENDING
+  // (the worker sets TRANSCRIBING when it actually starts)
   await prisma.video.updateMany({
     where: { id: { in: videoIds }, status: { in: ["PENDING", "ERROR"] } },
-    data: { status: "TRANSCRIBING", errorMessage: null },
+    data: { errorMessage: null },
   });
 
-  // Fire-and-forget: spawn Python worker for each video
-  for (const videoId of videoIds) {
-    const video = await prisma.video.findUnique({ where: { id: videoId } });
-    if (!video) continue;
+  // Fetch file paths for the queued videos
+  const videos = await prisma.video.findMany({
+    where: { id: { in: videoIds }, status: { in: ["PENDING", "ERROR"] } },
+    select: { id: true, filePath: true },
+  });
 
-    const scriptPath = path.join(process.cwd(), "python", "worker.py");
-    const child = spawn("python3", [scriptPath, videoId, video.filePath], {
-      detached: true,
-      stdio: "ignore",
-      env: { ...process.env },
-    });
-    child.unref();
-  }
+  enqueueVideos(videos.map((v) => ({ videoId: v.id, filePath: v.filePath })));
 
-  return NextResponse.json({ queued: videoIds.length });
+  const { active, pending } = getQueueStatus();
+  return NextResponse.json({ queued: videos.length, active, pending });
+}
+
+// GET /api/process — queue status
+export async function GET() {
+  return NextResponse.json(getQueueStatus());
 }

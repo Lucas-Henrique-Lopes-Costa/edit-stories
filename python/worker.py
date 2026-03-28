@@ -57,6 +57,30 @@ def extract_audio(video_path: str, out_path: str):
     )
 
 
+def compress_video(input_path: str) -> str:
+    """
+    Re-encode to H.264 MP4 optimised for Meta Ads:
+      - CRF 23  → good quality / size balance (~60-80 % smaller than .mov)
+      - preset medium → reasonable encode speed
+      - +faststart  → moov atom first (required for Meta upload & web streaming)
+    Returns the output path. Raises on failure.
+    """
+    base = os.path.splitext(input_path)[0]
+    output_path = base + "_compressed.mp4"
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_path,
+        "-c:v", "libx264", "-crf", "23", "-preset", "medium",
+        "-c:a", "aac", "-b:a", "128k",
+        "-movflags", "+faststart",
+        output_path,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(f"Compression failed:\n{result.stderr[-1500:]}")
+    return output_path
+
+
 def get_duration(video_path: str) -> float:
     result = subprocess.run(
         [
@@ -180,6 +204,36 @@ def main():
                 (seg_id, video_id, i, seg["start"], seg["end"], seg["text"].strip(), now, now),
             )
         conn.commit()
+
+        # Compress video to H.264 MP4 (Meta Ads optimised)
+        print(f"[worker] Compressing {file_path} ...", file=sys.stderr)
+        try:
+            compressed_path = compress_video(file_path)
+            compressed_name = os.path.basename(compressed_path)
+            original_size   = os.path.getsize(file_path)
+            compressed_size = os.path.getsize(compressed_path)
+            ratio = (1 - compressed_size / original_size) * 100 if original_size else 0
+            print(f"[worker] Compressed: {original_size//1024//1024} MB → {compressed_size//1024//1024} MB ({ratio:.0f}% reduction)", file=sys.stderr)
+
+            # Update DB to point to compressed file
+            conn.execute(
+                "UPDATE Video SET filePath=?, fileName=?, updatedAt=? WHERE id=?",
+                (compressed_path, compressed_name, datetime.datetime.utcnow().isoformat() + "Z", video_id),
+            )
+            conn.commit()
+
+            # Remove original heavy file
+            try:
+                os.unlink(file_path)
+            except Exception as e:
+                print(f"[worker] Could not delete original: {e}", file=sys.stderr)
+
+            # Use compressed path for downstream steps
+            file_path = compressed_path
+
+        except Exception as e:
+            # Non-fatal: keep original if compression fails
+            print(f"[worker] Compression skipped (error): {e}", file=sys.stderr)
 
         # Generate short name
         update_status(conn, video_id, "GENERATING")

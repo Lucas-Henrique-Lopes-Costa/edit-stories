@@ -2,8 +2,9 @@
 // All values can be overridden per project or per video in a future version
 
 export const SUBTITLE_CONFIG = {
-  // Font
-  fontSize: 36,
+  // Font size as fraction of video height — same visual size at any resolution.
+  // 36px / 1920px ≈ 1.875% of video height.
+  fontSizeRatio: 72 / 1920,
   fontFamily: "Arial",
   fontWeight: "bold" as const,
   textColor: "#FFFFFF",

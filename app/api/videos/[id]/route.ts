@@ -13,6 +13,7 @@ export async function GET(
       transcription: true,
       segments: { orderBy: { index: "asc" } },
       exportJobs: { orderBy: { createdAt: "desc" }, take: 1 },
+      products: { include: { product: true } },
     },
   });
 
@@ -30,7 +31,7 @@ export async function PATCH(
   const { id } = await params;
   const body = await req.json();
 
-  const allowed = ["shortName", "status"];
+  const allowed = ["shortName", "status", "subtitlePosition", "fontSize", "trimStart", "trimEnd"];
   const data: Record<string, unknown> = {};
   for (const key of allowed) {
     if (key in body) data[key] = body[key];
