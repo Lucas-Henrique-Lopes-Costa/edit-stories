@@ -120,6 +120,85 @@ function VideoThumb({ fileName, name }: { fileName: string; name: string }) {
   );
 }
 
+// ─── Product cell ─────────────────────────────────────────────────────────────
+
+function ProductCell({
+  videoId,
+  linkedIds,
+  allProducts,
+  onChange,
+}: {
+  videoId: string;
+  linkedIds: Set<string>;
+  allProducts: Product[];
+  onChange: (videoId: string, next: Set<string>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const toggle = async (productId: string) => {
+    const next = new Set(linkedIds);
+    if (next.has(productId)) next.delete(productId); else next.add(productId);
+    onChange(videoId, next);
+    await fetch(`/api/videos/${videoId}/products`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ productIds: Array.from(next) }),
+    });
+  };
+
+  const linked = allProducts.filter((p) => linkedIds.has(p.id));
+
+  return (
+    <div className="flex flex-wrap items-center gap-1" ref={ref}>
+      {linked.map((p) => (
+        <span
+          key={p.id}
+          className="flex items-center gap-0.5 text-[10px] bg-indigo-900/40 text-indigo-400 border border-indigo-700/30 px-1.5 py-0.5 rounded-full"
+        >
+          {p.name}
+          <button onClick={() => toggle(p.id)} className="hover:text-red-400 leading-none ml-0.5">×</button>
+        </span>
+      ))}
+      {allProducts.length > 0 && (
+        <div className="relative">
+          <button
+            onClick={() => setOpen((v) => !v)}
+            className="text-[10px] px-1.5 py-0.5 border border-zinc-700 hover:border-indigo-500 text-zinc-600 hover:text-indigo-400 rounded-full transition-colors"
+          >
+            +
+          </button>
+          {open && (
+            <div className="absolute left-0 top-5 z-30 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl min-w-[130px] py-1">
+              {allProducts.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => toggle(p.id)}
+                  className={`w-full text-left text-xs px-3 py-1.5 hover:bg-zinc-700 flex items-center gap-2 ${
+                    linkedIds.has(p.id) ? "text-indigo-300" : "text-zinc-300"
+                  }`}
+                >
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${linkedIds.has(p.id) ? "bg-indigo-400" : "bg-zinc-600"}`} />
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Cell input ───────────────────────────────────────────────────────────────
 
 function MetricCell({
@@ -146,6 +225,29 @@ function MetricCell({
   );
 }
 
+type SortKey = "name" | "investedValue" | "salesValue" | "salesCount" | "impressions" | "reach" | "roas" | "cac" | "freq";
+type SortDir = "asc" | "desc";
+
+function SortTh({
+  label, sortKey, current, dir, onSort, align = "right", className = "", muted = false,
+}: {
+  label: string; sortKey: SortKey; current: SortKey | null; dir: SortDir;
+  onSort: (k: SortKey) => void; align?: "left" | "right"; className?: string; muted?: boolean;
+}) {
+  const active = current === sortKey;
+  return (
+    <th
+      className={`px-3 py-3 font-medium cursor-pointer select-none whitespace-nowrap ${className} text-${align} ${
+        active ? "text-white" : muted ? "text-zinc-500 hover:text-zinc-300" : "text-zinc-400 hover:text-zinc-200"
+      } transition-colors`}
+      onClick={() => onSort(sortKey)}
+    >
+      {label}
+      <span className="ml-1 text-[10px] opacity-60">{active ? (dir === "asc" ? "↑" : "↓") : "↕"}</span>
+    </th>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function AnalyticsPage() {
@@ -153,7 +255,12 @@ export default function AnalyticsPage() {
   const [rows,   setRows]     = useState<Record<string, RowState>>({});
   const [products, setProducts] = useState<Product[]>([]);
   const [productFilter, setProductFilter] = useState<string | null>(null);
+  const [linkedProducts, setLinkedProducts] = useState<Record<string, Set<string>>>({});
   const [loading, setLoading] = useState(true);
+  const [sortKey, setSortKey] = useState<SortKey | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [downloading, setDownloading] = useState(false);
 
   // fetch once
   useEffect(() => {
@@ -164,6 +271,13 @@ export default function AnalyticsPage() {
       const vids: VideoWithRelations[] = vData.videos ?? [];
       setVideos(vids);
       setProducts(pData.products ?? []);
+
+      // Build initial linked products state
+      const initLinked: Record<string, Set<string>> = {};
+      for (const v of vids) {
+        initLinked[v.id] = new Set((v.products ?? []).map((vp) => vp.product.id));
+      }
+      setLinkedProducts(initLinked);
 
       // Build initial row state from saved metrics
       const init: Record<string, RowState> = {};
@@ -212,10 +326,71 @@ export default function AnalyticsPage() {
     setRows((prev) => ({ ...prev, [videoId]: { ...prev[videoId], saving: false, saved: true } }));
   }, [rows]);
 
+  const handleProductChange = useCallback((videoId: string, next: Set<string>) => {
+    setLinkedProducts((prev) => ({ ...prev, [videoId]: next }));
+  }, []);
+
+  const handleSort = useCallback((key: SortKey) => {
+    setSortKey((prev) => {
+      if (prev === key) { setSortDir((d) => d === "asc" ? "desc" : "asc"); return key; }
+      setSortDir("desc");
+      return key;
+    });
+  }, []);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelected((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
+  }, []);
+
+  const handleDownloadSelected = useCallback(async () => {
+    const ids = Array.from(selected).filter((id) => videos.find((v) => v.id === id)?.status === "EXPORTED");
+    if (ids.length === 0) return;
+    setDownloading(true);
+    ids.forEach((id, i) => {
+      setTimeout(() => {
+        const a = document.createElement("a");
+        a.href = `/api/download/${id}`;
+        a.download = "";
+        a.click();
+      }, i * 600);
+    });
+    setTimeout(() => setDownloading(false), ids.length * 600 + 500);
+  }, [selected, videos]);
+
   const filtered = useMemo(() => {
-    if (!productFilter) return videos;
-    return videos.filter((v) => v.products?.some((vp) => vp.product.id === productFilter));
-  }, [videos, productFilter]);
+    const base = productFilter
+      ? videos.filter((v) => linkedProducts[v.id]?.has(productFilter))
+      : videos;
+
+    if (!sortKey) return base;
+
+    return [...base].sort((a, b) => {
+      let av: number | null = null;
+      let bv: number | null = null;
+
+      if (sortKey === "name") {
+        const an = a.shortName ?? a.shortNameAuto ?? a.originalName;
+        const bn = b.shortName ?? b.shortNameAuto ?? b.originalName;
+        return sortDir === "asc" ? an.localeCompare(bn) : bn.localeCompare(an);
+      }
+
+      const getCalc = (id: string) => {
+        const m = rows[id]?.metrics;
+        if (!m) return { roas: null, cac: null, freq: null };
+        return calcMetrics(m);
+      };
+
+      if (sortKey === "roas") { av = getCalc(a.id).roas; bv = getCalc(b.id).roas; }
+      else if (sortKey === "cac") { av = getCalc(a.id).cac; bv = getCalc(b.id).cac; }
+      else if (sortKey === "freq") { av = getCalc(a.id).freq; bv = getCalc(b.id).freq; }
+      else { av = toNum(rows[a.id]?.metrics[sortKey as keyof RowMetrics] ?? ""); bv = toNum(rows[b.id]?.metrics[sortKey as keyof RowMetrics] ?? ""); }
+
+      if (av === null && bv === null) return 0;
+      if (av === null) return 1;
+      if (bv === null) return -1;
+      return sortDir === "asc" ? av - bv : bv - av;
+    });
+  }, [videos, productFilter, linkedProducts, sortKey, sortDir, rows]);
 
   // ── totals row ──────────────────────────────────────────────────────────────
   const totals = useMemo(() => {
@@ -260,7 +435,16 @@ export default function AnalyticsPage() {
         </Link>
         <div className="h-4 w-px bg-zinc-700" />
         <h1 className="text-sm font-semibold">Analytics</h1>
-        <div className="ml-auto flex items-center gap-2 flex-wrap">
+        <div className="ml-auto flex items-center gap-3 flex-wrap">
+          {selected.size > 0 && (
+            <button
+              onClick={handleDownloadSelected}
+              disabled={downloading}
+              className="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded transition-colors disabled:opacity-50"
+            >
+              {downloading ? "Baixando..." : `Baixar selecionados (${selected.size})`}
+            </button>
+          )}
           <span className="text-xs text-zinc-500">{filtered.length} vídeo(s)</span>
         </div>
       </header>
@@ -296,20 +480,26 @@ export default function AnalyticsPage() {
         <table className="w-full text-xs border-collapse min-w-[1100px]">
           <thead className="sticky top-0 z-10 bg-zinc-900 border-b border-zinc-800">
             <tr>
-              <th className="px-4 py-3 w-14"></th>
-              <th className="text-left px-4 py-3 text-zinc-400 font-medium w-48">Vídeo</th>
+              <th className="px-3 py-3 w-8">
+                <input
+                  type="checkbox"
+                  className="accent-indigo-500 h-3.5 w-3.5"
+                  checked={selected.size === filtered.length && filtered.length > 0}
+                  onChange={(e) => setSelected(e.target.checked ? new Set(filtered.map((v) => v.id)) : new Set())}
+                />
+              </th>
+              <th className="px-2 py-3 w-10"></th>
+              <SortTh label="Vídeo" sortKey="name" current={sortKey} dir={sortDir} onSort={handleSort} align="left" className="w-44" />
               <th className="text-left px-3 py-3 text-zinc-400 font-medium w-32">Produto</th>
-              {/* inputs */}
-              <th className="text-right px-3 py-3 text-zinc-400 font-medium w-28">Investido</th>
-              <th className="text-right px-3 py-3 text-zinc-400 font-medium w-28">Vl. Vendas</th>
-              <th className="text-right px-3 py-3 text-zinc-400 font-medium w-20">Vendas</th>
-              <th className="text-right px-3 py-3 text-zinc-400 font-medium w-24">Impressões</th>
-              <th className="text-right px-3 py-3 text-zinc-400 font-medium w-24">Alcance</th>
-              {/* calculated */}
-              <th className="text-right px-3 py-3 text-zinc-500 font-medium w-20">ROAS</th>
-              <th className="text-right px-3 py-3 text-zinc-500 font-medium w-24">CAC</th>
-              <th className="text-right px-3 py-3 text-zinc-500 font-medium w-24">Freq. média</th>
-              <th className="text-right px-3 py-3 text-zinc-500 font-medium w-12"></th>
+              <SortTh label="Investido" sortKey="investedValue" current={sortKey} dir={sortDir} onSort={handleSort} className="w-28" />
+              <SortTh label="Vl. Vendas" sortKey="salesValue" current={sortKey} dir={sortDir} onSort={handleSort} className="w-28" />
+              <SortTh label="Vendas" sortKey="salesCount" current={sortKey} dir={sortDir} onSort={handleSort} className="w-20" />
+              <SortTh label="Impressões" sortKey="impressions" current={sortKey} dir={sortDir} onSort={handleSort} className="w-24" />
+              <SortTh label="Alcance" sortKey="reach" current={sortKey} dir={sortDir} onSort={handleSort} className="w-24" />
+              <SortTh label="ROAS" sortKey="roas" current={sortKey} dir={sortDir} onSort={handleSort} className="w-20" muted />
+              <SortTh label="CAC" sortKey="cac" current={sortKey} dir={sortDir} onSort={handleSort} className="w-24" muted />
+              <SortTh label="Freq. média" sortKey="freq" current={sortKey} dir={sortDir} onSort={handleSort} className="w-24" muted />
+              <th className="text-right px-3 py-3 text-zinc-500 font-medium w-28"></th>
             </tr>
           </thead>
           <tbody>
@@ -324,30 +514,35 @@ export default function AnalyticsPage() {
                   key={video.id}
                   className="border-b border-zinc-800/60 hover:bg-zinc-900/40 transition-colors group"
                 >
+                  {/* Checkbox */}
+                  <td className="px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      className="accent-indigo-500 h-3.5 w-3.5"
+                      checked={selected.has(video.id)}
+                      onChange={() => toggleSelect(video.id)}
+                    />
+                  </td>
+
                   {/* Thumbnail */}
-                  <td className="px-4 py-2.5">
+                  <td className="px-2 py-2.5">
                     <VideoThumb fileName={video.fileName} name={name} />
                   </td>
 
                   {/* Name */}
                   <td className="px-4 py-2.5">
-                    <p className="text-zinc-200 font-medium truncate max-w-[180px]" title={name}>{name}</p>
-                    <p className="text-zinc-600 truncate max-w-[180px] text-[10px] mt-0.5">{video.originalName}</p>
+                    <p className="text-zinc-200 font-medium truncate max-w-40" title={name}>{name}</p>
+                    <p className="text-zinc-600 truncate max-w-40 text-[10px] mt-0.5">{video.originalName}</p>
                   </td>
 
                   {/* Products */}
                   <td className="px-3 py-2.5">
-                    <div className="flex flex-wrap gap-1">
-                      {(video.products ?? []).length > 0 ? (
-                        video.products!.map((vp) => (
-                          <span key={vp.product.id} className="text-[10px] bg-indigo-900/40 text-indigo-400 px-1.5 py-0.5 rounded-full">
-                            {vp.product.name}
-                          </span>
-                        ))
-                      ) : (
-                        <span className="text-zinc-700">—</span>
-                      )}
-                    </div>
+                    <ProductCell
+                      videoId={video.id}
+                      linkedIds={linkedProducts[video.id] ?? new Set()}
+                      allProducts={products}
+                      onChange={handleProductChange}
+                    />
                   </td>
 
                   {/* Input metrics */}
@@ -388,10 +583,27 @@ export default function AnalyticsPage() {
                     {fmtNum(freq) ?? <span className="text-zinc-700">—</span>}
                   </td>
 
-                  {/* Save indicator */}
-                  <td className="px-3 py-2.5 text-right">
-                    {row.saving && <span className="text-zinc-600 text-[10px]">salvando</span>}
-                    {!row.saving && !row.saved && <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 inline-block" title="Alterações não salvas" />}
+                  {/* Actions + save indicator */}
+                  <td className="px-3 py-2.5">
+                    <div className="flex items-center justify-end gap-1">
+                      {row.saving && <span className="text-zinc-600 text-[10px] mr-1">salvando</span>}
+                      {!row.saving && !row.saved && <span className="w-1.5 h-1.5 rounded-full bg-yellow-500 mr-1" title="Alterações não salvas" />}
+                      <Link
+                        href={`/review/${video.id}`}
+                        className="opacity-0 group-hover:opacity-100 text-[10px] px-2 py-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded transition-all"
+                      >
+                        Editar
+                      </Link>
+                      {video.status === "EXPORTED" && (
+                        <a
+                          href={`/api/download/${video.id}`}
+                          download
+                          className="opacity-0 group-hover:opacity-100 text-[10px] px-2 py-1 bg-emerald-800 hover:bg-emerald-700 text-white rounded transition-all"
+                        >
+                          Baixar
+                        </a>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );

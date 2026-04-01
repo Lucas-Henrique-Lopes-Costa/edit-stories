@@ -21,6 +21,7 @@ model Video {
   fontSize          Float   @default(0.01875) // font size as fraction of video height
   trimStart         Float   @default(0)       // trim start in seconds
   trimEnd           Float?                    // trim end in seconds (null = full duration)
+  withSubtitles     Boolean @default(true)    // whether to burn subtitles on export
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
@@ -29,6 +30,7 @@ model Video {
   exportJobs    ExportJob[]
   products      VideoProduct[]
   metrics       VideoMetrics?
+  scripts       Script[]
 }
 
 model VideoMetrics {
@@ -44,10 +46,38 @@ model VideoMetrics {
 }
 
 model Product {
-  id        String         @id @default(cuid())
-  name      String         @unique
-  createdAt DateTime       @default(now())
-  videos    VideoProduct[]
+  id              String         @id @default(cuid())
+  name            String         @unique
+  description     String?
+  benefits        String?
+  targetAudience  String?
+  price           String?
+  objections      String?
+  createdAt       DateTime       @default(now())
+  videos          VideoProduct[]
+  scripts         Script[]
+}
+
+model Company {
+  id          String   @id @default(cuid())
+  name        String   @default("")
+  description String?
+  tone        String?
+  updatedAt   DateTime @updatedAt
+}
+
+model Script {
+  id        String   @id @default(cuid())
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  videoId   String?
+  video     Video?   @relation(fields: [videoId], references: [id], onDelete: SetNull)
+  prompt    String
+  content   String
+  format    String?
+  status    String   @default("TO_RECORD")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model VideoProduct {

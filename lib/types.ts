@@ -12,7 +12,34 @@ export interface VideoMetrics {
 export interface Product {
   id: string;
   name: string;
+  description?: string | null;
+  benefits?: string | null;
+  targetAudience?: string | null;
+  price?: string | null;
+  objections?: string | null;
   createdAt: string;
+}
+
+export interface Company {
+  id: string;
+  name: string;
+  description?: string | null;
+  tone?: string | null;
+  updatedAt: string;
+}
+
+export interface Script {
+  id: string;
+  productId: string | null;
+  product: Product | null;
+  videoId: string | null;
+  video: { id: string; originalName: string; shortName: string | null; shortNameAuto: string | null; fileName: string } | null;
+  prompt: string;
+  content: string;
+  format: string | null;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type VideoStatus =
@@ -41,6 +68,7 @@ export interface VideoWithRelations {
   fontSize: number;
   trimStart: number;
   trimEnd: number | null;
+  withSubtitles: boolean;
   createdAt: string;
   updatedAt: string;
   products?: { product: Product }[];

@@ -14,18 +14,20 @@ interface Props {
   onReprocess: (id: string) => void;
   onDelete: (id: string) => void;
   onBackToEdit: (id: string) => void;
+  onExport: (id: string) => void;
   onProductsChanged: () => void;
 }
 
 export function VideoCard({
   video, selected, allProducts,
-  onSelect, onApprove, onReprocess, onDelete, onBackToEdit, onProductsChanged,
+  onSelect, onApprove, onReprocess, onDelete, onBackToEdit, onExport, onProductsChanged,
 }: Props) {
   const name = video.shortName ?? video.shortNameAuto ?? video.originalName;
   const canApprove    = video.status === "READY";
+  const canExport     = video.status === "APPROVED";
   const canReprocess  = video.status === "ERROR" || video.status === "PENDING";
   const canReview     = ["READY", "APPROVED"].includes(video.status);
-  const canBackToEdit = ["APPROVED", "EXPORTED"].includes(video.status);
+  const canBackToEdit = ["APPROVED", "EXPORTED", "EXPORTING"].includes(video.status);
   const exportedJob   = video.status === "EXPORTED" ? video.exportJobs?.[0] : null;
 
   const [linkedIds, setLinkedIds] = useState<Set<string>>(
@@ -157,6 +159,14 @@ export function VideoCard({
             className="text-xs px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white rounded transition-colors"
           >
             Aprovar
+          </button>
+        )}
+        {canExport && (
+          <button
+            onClick={() => onExport(video.id)}
+            className="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded transition-colors"
+          >
+            Exportar
           </button>
         )}
         {canReprocess && (

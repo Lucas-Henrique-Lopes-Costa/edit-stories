@@ -31,7 +31,7 @@ export async function PATCH(
   const { id } = await params;
   const body = await req.json();
 
-  const allowed = ["shortName", "status", "subtitlePosition", "fontSize", "trimStart", "trimEnd"];
+  const allowed = ["shortName", "status", "subtitlePosition", "fontSize", "trimStart", "trimEnd", "withSubtitles"];
   const data: Record<string, unknown> = {};
   for (const key of allowed) {
     if (key in body) data[key] = body[key];

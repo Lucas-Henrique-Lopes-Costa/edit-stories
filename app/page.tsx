@@ -59,6 +59,21 @@ export default function Home() {
     newProductRef.current?.focus();
   }, [newProductName, fetchProducts]);
 
+  const [editingProductId, setEditingProductId] = useState<string | null>(null);
+  const [editingProductName, setEditingProductName] = useState("");
+
+  const handleRenameProduct = useCallback(async (id: string) => {
+    const name = editingProductName.trim();
+    if (!name) return;
+    await fetch(`/api/products/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    setEditingProductId(null);
+    fetchProducts();
+  }, [editingProductName, fetchProducts]);
+
   const handleDeleteProduct = useCallback(async (id: string) => {
     await fetch(`/api/products/${id}`, { method: "DELETE" });
     fetchProducts();
@@ -160,6 +175,15 @@ export default function Home() {
     );
   }, [filtered]);
 
+  const handleExportSingle = useCallback(async (id: string) => {
+    await fetch("/api/export", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ videoIds: [id] }),
+    });
+    fetchVideos();
+  }, [fetchVideos]);
+
   const handleExportSelected = useCallback(async () => {
     const ids = Array.from(selected).filter(
       (id) => videos.find((v) => v.id === id)?.status === "APPROVED"
@@ -212,6 +236,9 @@ export default function Home() {
         <div className="flex items-center gap-4 text-sm text-zinc-400">
           {readyCount > 0 && <span className="text-yellow-400">{readyCount} para revisar</span>}
           {approvedCount > 0 && <span className="text-green-400">{approvedCount} aprovado(s)</span>}
+          <a href="/content" className="text-zinc-400 hover:text-white transition-colors border border-zinc-700 hover:border-zinc-500 px-3 py-1.5 rounded text-xs">
+            Conteúdo
+          </a>
           <a href="/analytics" className="text-zinc-400 hover:text-white transition-colors border border-zinc-700 hover:border-zinc-500 px-3 py-1.5 rounded text-xs">
             Analytics
           </a>
@@ -235,11 +262,31 @@ export default function Home() {
               {products.length > 0 && (
                 <div className="flex flex-wrap gap-2">
                   {products.map((p) => (
-                    <span key={p.id} className="flex items-center gap-1.5 text-xs bg-indigo-900/50 text-indigo-300 border border-indigo-700/40 px-2.5 py-1 rounded-full">
-                      {p.name}
+                    <span key={p.id} className="flex items-center gap-1 text-xs bg-indigo-900/50 text-indigo-300 border border-indigo-700/40 px-2 py-1 rounded-full">
+                      {editingProductId === p.id ? (
+                        <input
+                          autoFocus
+                          value={editingProductName}
+                          onChange={(e) => setEditingProductName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleRenameProduct(p.id);
+                            if (e.key === "Escape") setEditingProductId(null);
+                          }}
+                          onBlur={() => handleRenameProduct(p.id)}
+                          className="bg-transparent text-indigo-200 focus:outline-none w-24 text-xs"
+                        />
+                      ) : (
+                        <button
+                          onClick={() => { setEditingProductId(p.id); setEditingProductName(p.name); }}
+                          className="hover:text-white transition-colors"
+                          title="Clique para renomear"
+                        >
+                          {p.name}
+                        </button>
+                      )}
                       <button
                         onClick={() => handleDeleteProduct(p.id)}
-                        className="text-indigo-500 hover:text-red-400 transition-colors leading-none"
+                        className="text-indigo-500 hover:text-red-400 transition-colors leading-none ml-0.5"
                       >
                         ×
                       </button>
@@ -403,6 +450,7 @@ export default function Home() {
                 onReprocess={handleReprocess}
                 onDelete={handleDelete}
                 onBackToEdit={handleBackToEdit}
+                onExport={handleExportSingle}
                 onProductsChanged={fetchVideos}
               />
             ))}

@@ -32,6 +32,7 @@ export default function ReviewPage() {
   const [verticalRatio, setVerticalRatio] = useState(SUBTITLE_CONFIG.verticalCenterRatio);
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState<number | null>(null);
+  const [withSubtitles, setWithSubtitles] = useState(true);
 
   useEffect(() => {
     fetch(`/api/videos/${id}`)
@@ -43,6 +44,7 @@ export default function ReviewPage() {
         setVerticalRatio(data.video.subtitlePosition ?? SUBTITLE_CONFIG.verticalCenterRatio);
         setTrimStart(data.video.trimStart ?? 0);
         setTrimEnd(data.video.trimEnd ?? null);
+        setWithSubtitles(data.video.withSubtitles ?? true);
       });
   }, [id]);
 
@@ -71,7 +73,7 @@ export default function ReviewPage() {
         fetch(`/api/videos/${id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ shortName, subtitlePosition: verticalRatio, trimStart, trimEnd }),
+          body: JSON.stringify({ shortName, subtitlePosition: verticalRatio, trimStart, trimEnd, withSubtitles }),
         }),
       ]);
 
@@ -87,7 +89,7 @@ export default function ReviewPage() {
     } finally {
       setSaving(false);
     }
-  }, [id, video, segments, shortName, verticalRatio]);
+  }, [id, video, segments, shortName, verticalRatio, trimStart, trimEnd, withSubtitles]);
 
   const handleApprove = useCallback(async () => {
     await handleSave();
@@ -112,7 +114,7 @@ export default function ReviewPage() {
       {/* Header */}
       <header className="border-b border-zinc-800 px-6 py-4 flex items-center gap-4">
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.back()}
           className="text-zinc-400 hover:text-white transition-colors text-sm"
         >
           ← Voltar
@@ -220,6 +222,27 @@ export default function ReviewPage() {
 
         {/* Subtitle editor panel */}
         <aside className="w-80 border-l border-zinc-800 bg-zinc-900 p-4 overflow-hidden flex flex-col">
+
+          {/* Export settings */}
+          <div className="mb-4 pb-4 border-b border-zinc-800">
+            <h2 className="text-sm font-semibold text-zinc-300 mb-3">Exportação</h2>
+            <label className="flex items-center justify-between cursor-pointer">
+              <span className="text-xs text-zinc-400">Exportar com legenda</span>
+              <button
+                type="button"
+                onClick={() => { setWithSubtitles((v) => !v); setSaved(false); }}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                  withSubtitles ? "bg-indigo-600" : "bg-zinc-700"
+                }`}
+              >
+                <span
+                  className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform ${
+                    withSubtitles ? "translate-x-4" : "translate-x-1"
+                  }`}
+                />
+              </button>
+            </label>
+          </div>
 
           {/* Trim controls */}
           <div className="mb-4 pb-4 border-b border-zinc-800">

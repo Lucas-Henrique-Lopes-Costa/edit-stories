@@ -247,7 +247,7 @@ def main():
 
         # Load video metadata
         row = conn.execute(
-            "SELECT shortName, shortNameAuto, originalName, subtitlePosition, trimStart, trimEnd FROM Video WHERE id=?",
+            "SELECT shortName, shortNameAuto, originalName, subtitlePosition, trimStart, trimEnd, withSubtitles FROM Video WHERE id=?",
             (video_id,),
         ).fetchone()
 
@@ -255,6 +255,7 @@ def main():
         font_size_ratio = FONT_SIZE_RATIO
         trim_start = float(row["trimStart"] or 0)
         trim_end   = float(row["trimEnd"]) if row["trimEnd"] is not None else None
+        with_subtitles = bool(row["withSubtitles"]) if row["withSubtitles"] is not None else True
 
         base_name = (
             (row["shortName"] or row["shortNameAuto"] or row["originalName"])
@@ -270,29 +271,31 @@ def main():
 
         # Shift segment timestamps to match trimmed video (input-level -ss remaps t to 0)
         trimmed_segments = []
-        for seg in segments:
-            s = seg["startTime"] - trim_start
-            e = seg["endTime"]   - trim_start
-            if trim_end is not None:
-                duration = trim_end - trim_start
-                if s >= duration:
+        if with_subtitles:
+            for seg in segments:
+                s = seg["startTime"] - trim_start
+                e = seg["endTime"]   - trim_start
+                if trim_end is not None:
+                    duration = trim_end - trim_start
+                    if s >= duration:
+                        continue
+                    e = min(e, duration)
+                if e <= 0:
                     continue
-                e = min(e, duration)
-            if e <= 0:
-                continue
-            trimmed_segments.append({**seg, "startTime": max(0, s), "endTime": e})
+                trimmed_segments.append({**seg, "startTime": max(0, s), "endTime": e})
 
-        # Render subtitle PNGs
-        effective_font_px = max(8, int(video_h * font_size_ratio))
-        print(f"[exporter] Rendering {len(trimmed_segments)} subtitle images "
-              f"(pos={vertical_ratio:.2f}, trim={trim_start:.1f}-{trim_end or 'end'}, "
-              f"font={effective_font_px}px)...", file=sys.stderr)
-        for i, seg in enumerate(trimmed_segments):
-            text = (seg["editedText"] or seg["originalText"]).strip()
-            png_path = os.path.join(tmp_dir, f"sub_{i:04d}.png")
-            render_subtitle_png(text, video_w, video_h, png_path, vertical_ratio, font_size_ratio)
+        if with_subtitles and trimmed_segments:
+            # Render subtitle PNGs
+            effective_font_px = max(8, int(video_h * font_size_ratio))
+            print(f"[exporter] Rendering {len(trimmed_segments)} subtitle images "
+                  f"(pos={vertical_ratio:.2f}, trim={trim_start:.1f}-{trim_end or 'end'}, "
+                  f"font={effective_font_px}px)...", file=sys.stderr)
+            for i, seg in enumerate(trimmed_segments):
+                text = (seg["editedText"] or seg["originalText"]).strip()
+                png_path = os.path.join(tmp_dir, f"sub_{i:04d}.png")
+                render_subtitle_png(text, video_w, video_h, png_path, vertical_ratio, font_size_ratio)
 
-        # Build filter_complex with trimmed segments
+        # Build filter_complex (empty segments = passthrough copy)
         filter_str, extra_inputs = build_filter_complex(trimmed_segments, tmp_dir, video_w, video_h)
 
         # Build FFmpeg command — input-level seek for fast trim
