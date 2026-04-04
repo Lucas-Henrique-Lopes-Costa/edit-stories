@@ -100,7 +100,7 @@ function VideoThumb({ fileName, name }: { fileName: string; name: string }) {
   return (
     <>
       <div
-        className="relative bg-black rounded overflow-hidden flex-shrink-0 cursor-pointer ring-0 hover:ring-2 hover:ring-blue-500 transition-all"
+        className="relative bg-black rounded overflow-hidden shrink-0 cursor-pointer ring-0 hover:ring-2 hover:ring-blue-500 transition-all"
         style={{ width: 36, height: 64 }}
         onMouseEnter={() => ref.current?.play()}
         onMouseLeave={() => { if (ref.current) { ref.current.pause(); ref.current.currentTime = 0; } }}
@@ -178,7 +178,7 @@ function ProductCell({
             +
           </button>
           {open && (
-            <div className="absolute left-0 top-5 z-30 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl min-w-[130px] py-1">
+            <div className="absolute left-0 top-5 z-30 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl min-w-32 py-1">
               {allProducts.map((p) => (
                 <button
                   key={p.id}
@@ -187,7 +187,7 @@ function ProductCell({
                     linkedIds.has(p.id) ? "text-indigo-300" : "text-zinc-300"
                   }`}
                 >
-                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${linkedIds.has(p.id) ? "bg-indigo-400" : "bg-zinc-600"}`} />
+                  <span className={`w-2 h-2 rounded-full shrink-0 ${linkedIds.has(p.id) ? "bg-indigo-400" : "bg-zinc-600"}`} />
                   {p.name}
                 </button>
               ))}
@@ -261,6 +261,7 @@ export default function AnalyticsPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [downloading, setDownloading] = useState(false);
+  const [exportingIds, setExportingIds] = useState<Set<string>>(new Set());
 
   // fetch once
   useEffect(() => {
@@ -342,20 +343,92 @@ export default function AnalyticsPage() {
     setSelected((prev) => { const next = new Set(prev); next.has(id) ? next.delete(id) : next.add(id); return next; });
   }, []);
 
-  const handleDownloadSelected = useCallback(async () => {
-    const ids = Array.from(selected).filter((id) => videos.find((v) => v.id === id)?.status === "EXPORTED");
-    if (ids.length === 0) return;
-    setDownloading(true);
-    ids.forEach((id, i) => {
-      setTimeout(() => {
-        const a = document.createElement("a");
-        a.href = `/api/download/${id}`;
-        a.download = "";
-        a.click();
-      }, i * 600);
+  // Poll a set of video IDs until all reach EXPORTED (or ERROR), updating local state.
+  const waitForExports = useCallback(async (ids: string[]): Promise<void> => {
+    return new Promise((resolve) => {
+      const pending = new Set(ids);
+      const iv = setInterval(async () => {
+        await Promise.all(
+          Array.from(pending).map(async (id) => {
+            const res = await fetch(`/api/videos/${id}`);
+            const data = await res.json();
+            const status: string = data.video?.status;
+            if (status === "EXPORTED" || status === "ERROR") {
+              pending.delete(id);
+              setExportingIds((prev) => { const next = new Set(prev); next.delete(id); return next; });
+              if (status === "EXPORTED") {
+                setVideos((prev) => prev.map((v) => v.id === id ? { ...v, status: "EXPORTED" } : v));
+              }
+            }
+          })
+        );
+        if (pending.size === 0) { clearInterval(iv); resolve(); }
+      }, 2000);
     });
-    setTimeout(() => setDownloading(false), ids.length * 600 + 500);
-  }, [selected, videos]);
+  }, []);
+
+  // Trigger export for APPROVED videos, wait, then bulk-zip-download all EXPORTED.
+  const handleDownloadSelected = useCallback(async () => {
+    const allIds = Array.from(selected);
+    const approvedIds = allIds.filter((id) => videos.find((v) => v.id === id)?.status === "APPROVED");
+    const exportedIds = allIds.filter((id) => videos.find((v) => v.id === id)?.status === "EXPORTED");
+
+    if (approvedIds.length === 0 && exportedIds.length === 0) return;
+    setDownloading(true);
+
+    try {
+      // Export APPROVED ones first
+      if (approvedIds.length > 0) {
+        setExportingIds((prev) => new Set([...prev, ...approvedIds]));
+        setVideos((prev) => prev.map((v) => approvedIds.includes(v.id) ? { ...v, status: "EXPORTING" } : v));
+        await fetch("/api/export", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ videoIds: approvedIds }),
+        });
+        await waitForExports(approvedIds);
+      }
+
+      // Bulk download all as ZIP
+      const idsToDownload = [...exportedIds, ...approvedIds];
+      const res = await fetch("/api/download/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoIds: idsToDownload }),
+      });
+      if (!res.ok) throw new Error("Erro ao gerar ZIP");
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `videos_${Date.now()}.zip`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } finally {
+      setDownloading(false);
+    }
+  }, [selected, videos, waitForExports]);
+
+  // Single video: export if needed, then download.
+  const handleDownloadSingle = useCallback(async (videoId: string, status: string) => {
+    if (exportingIds.has(videoId)) return;
+
+    if (status === "APPROVED") {
+      setExportingIds((prev) => new Set([...prev, videoId]));
+      setVideos((prev) => prev.map((v) => v.id === videoId ? { ...v, status: "EXPORTING" } : v));
+      await fetch("/api/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ videoIds: [videoId] }),
+      });
+      await waitForExports([videoId]);
+    }
+
+    const a = document.createElement("a");
+    a.href = `/api/download/${videoId}`;
+    a.download = "";
+    a.click();
+  }, [exportingIds, waitForExports]);
 
   const filtered = useMemo(() => {
     const base = productFilter
@@ -442,7 +515,9 @@ export default function AnalyticsPage() {
               disabled={downloading}
               className="text-xs px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded transition-colors disabled:opacity-50"
             >
-              {downloading ? "Baixando..." : `Baixar selecionados (${selected.size})`}
+              {downloading
+                ? exportingIds.size > 0 ? `Exportando ${exportingIds.size}...` : "Gerando ZIP..."
+                : `Baixar selecionados (${selected.size})`}
             </button>
           )}
           <span className="text-xs text-zinc-500">{filtered.length} vídeo(s)</span>
@@ -477,7 +552,7 @@ export default function AnalyticsPage() {
 
       {/* Table */}
       <div className="flex-1 overflow-auto">
-        <table className="w-full text-xs border-collapse min-w-[1100px]">
+        <table className="w-full text-xs border-collapse min-w-275">
           <thead className="sticky top-0 z-10 bg-zinc-900 border-b border-zinc-800">
             <tr>
               <th className="px-3 py-3 w-8">
@@ -594,14 +669,14 @@ export default function AnalyticsPage() {
                       >
                         Editar
                       </Link>
-                      {video.status === "EXPORTED" && (
-                        <a
-                          href={`/api/download/${video.id}`}
-                          download
-                          className="opacity-0 group-hover:opacity-100 text-[10px] px-2 py-1 bg-emerald-800 hover:bg-emerald-700 text-white rounded transition-all"
+                      {(video.status === "EXPORTED" || video.status === "APPROVED") && (
+                        <button
+                          onClick={() => handleDownloadSingle(video.id, video.status)}
+                          disabled={exportingIds.has(video.id)}
+                          className="opacity-0 group-hover:opacity-100 text-[10px] px-2 py-1 bg-emerald-800 hover:bg-emerald-700 text-white rounded transition-all disabled:opacity-50"
                         >
-                          Baixar
-                        </a>
+                          {exportingIds.has(video.id) ? "Exportando..." : "Baixar"}
+                        </button>
                       )}
                     </div>
                   </td>
