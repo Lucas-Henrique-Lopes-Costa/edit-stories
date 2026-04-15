@@ -242,6 +242,9 @@ export default function Home() {
           <a href="/analytics" className="text-zinc-400 hover:text-white transition-colors border border-zinc-700 hover:border-zinc-500 px-3 py-1.5 rounded text-xs">
             Analytics
           </a>
+          <a href="/ads" className="text-zinc-400 hover:text-white transition-colors border border-zinc-700 hover:border-zinc-500 px-3 py-1.5 rounded text-xs">
+            Meta Ads
+          </a>
         </div>
       </header>
 
