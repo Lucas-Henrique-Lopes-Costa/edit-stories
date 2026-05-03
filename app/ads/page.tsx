@@ -103,6 +103,10 @@ export default function AdsPage() {
   const [countries, setCountries] = useState("BR");
   const [newCampaignFolder, setNewCampaignFolder] = useState("");
   const [newCampaignFiles, setNewCampaignFiles] = useState<{ name: string }[]>([]);
+  const [newCampaignSource, setNewCampaignSource] = useState<"local" | "drive">("local");
+  const [newCampaignDriveUrl, setNewCampaignDriveUrl] = useState("");
+  const [newCampaignDriveDownloading, setNewCampaignDriveDownloading] = useState(false);
+  const [newCampaignDrivePath, setNewCampaignDrivePath] = useState("");
   const [creating, setCreating] = useState(false);
 
   // --- Upload to existing ---
@@ -115,6 +119,10 @@ export default function AdsPage() {
   const [selectedAdSetId, setSelectedAdSetId] = useState("");
   const [uploadFolder, setUploadFolder] = useState("");
   const [uploadFiles, setUploadFiles] = useState<{ name: string }[]>([]);
+  const [uploadSource, setUploadSource] = useState<"local" | "drive">("local");
+  const [uploadDriveUrl, setUploadDriveUrl] = useState("");
+  const [uploadDriveDownloading, setUploadDriveDownloading] = useState(false);
+  const [uploadDrivePath, setUploadDrivePath] = useState("");
   const [uploading, setUploading] = useState(false);
 
   // Shared logs
@@ -212,6 +220,21 @@ export default function AdsPage() {
     }
   }, [addLog]);
 
+  const downloadDriveFolder = useCallback(async (driveUrl: string): Promise<string | null> => {
+    const res = await fetch("/api/ads/drive-download", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ driveUrl }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      addLog({ text: data.error || "Falha ao baixar pasta do Drive.", type: "error" });
+      return null;
+    }
+    addLog({ text: `Drive: ${data.files.length} vídeo(s) baixado(s).`, type: "success" });
+    return data.tempPath;
+  }, [addLog]);
+
   const handleCreate = useCallback(async () => {
     if (!settings.accessToken || !settings.adAccountId || !settings.pageId) {
       alert("Preencha o Access Token, Ad Account ID e Page ID nas configurações.");
@@ -221,7 +244,17 @@ export default function AdsPage() {
       alert("Preencha o nome da campanha e do conjunto de anúncios.");
       return;
     }
-    if (!newCampaignFolder) {
+
+    let folderPath = newCampaignFolder;
+    if (newCampaignSource === "drive") {
+      if (!newCampaignDriveUrl) { alert("Cole o link da pasta do Google Drive."); return; }
+      if (newCampaignDrivePath) {
+        folderPath = newCampaignDrivePath;
+      } else {
+        alert("Clique em 'Baixar vídeos' antes de criar a campanha.");
+        return;
+      }
+    } else if (!folderPath) {
       alert("Selecione uma pasta de criativos.");
       return;
     }
@@ -247,7 +280,7 @@ export default function AdsPage() {
           ageMax: parseInt(ageMax) || 54,
           genders: GENDER_OPTIONS[genderIdx].value,
           countries: countries.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean),
-          folderPath: newCampaignFolder,
+          folderPath,
         },
         addLog
       );
@@ -256,14 +289,24 @@ export default function AdsPage() {
     } finally {
       setCreating(false);
     }
-  }, [settings, campaignName, adSetName, dailyBudget, ageMin, ageMax, genderIdx, countries, newCampaignFolder, addLog]);
+  }, [settings, campaignName, adSetName, dailyBudget, ageMin, ageMax, genderIdx, countries, newCampaignFolder, newCampaignSource, newCampaignDriveUrl, newCampaignDrivePath, addLog]);
 
   const handleUpload = useCallback(async () => {
     if (!selectedAdSetId) {
       alert("Selecione um conjunto de anúncios.");
       return;
     }
-    if (!uploadFolder) {
+
+    let folderPath = uploadFolder;
+    if (uploadSource === "drive") {
+      if (!uploadDriveUrl) { alert("Cole o link da pasta do Google Drive."); return; }
+      if (uploadDrivePath) {
+        folderPath = uploadDrivePath;
+      } else {
+        alert("Clique em 'Baixar vídeos' antes de subir os anúncios.");
+        return;
+      }
+    } else if (!folderPath) {
       alert("Selecione uma pasta de criativos.");
       return;
     }
@@ -274,7 +317,7 @@ export default function AdsPage() {
     try {
       await streamSSE(
         "/api/ads/upload",
-        { adSetId: selectedAdSetId, folderPath: uploadFolder },
+        { adSetId: selectedAdSetId, folderPath },
         addLog
       );
     } catch (err) {
@@ -282,7 +325,7 @@ export default function AdsPage() {
     } finally {
       setUploading(false);
     }
-  }, [selectedAdSetId, uploadFolder, addLog]);
+  }, [selectedAdSetId, uploadFolder, uploadSource, uploadDriveUrl, uploadDrivePath, addLog]);
 
   const busy = creating || uploading;
 
@@ -453,21 +496,54 @@ export default function AdsPage() {
               </div>
 
               {/* Folder for upload */}
-              <div className="flex flex-col gap-1">
-                <label className="text-xs text-zinc-400">Pasta de criativos</label>
-                <SearchSelect
-                  options={folders}
-                  value={uploadFolder}
-                  onChange={setUploadFolder}
-                  placeholder="Selecionar pasta..."
-                  disabled={busy}
-                />
-                {uploadFiles.length > 0 && (
-                  <div className="mt-1.5 flex flex-col gap-0.5">
-                    <p className="text-xs text-zinc-500">{uploadFiles.length} vídeo(s):</p>
-                    {uploadFiles.map((f) => (
-                      <p key={f.name} className="text-xs text-zinc-400 pl-2">• {f.name}</p>
-                    ))}
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-1">
+                  <label className="text-xs text-zinc-400 mr-2">Criativos:</label>
+                  <button
+                    onClick={() => { setUploadSource("local"); setUploadDrivePath(""); }}
+                    className={`text-xs px-3 py-1 rounded transition-colors ${uploadSource === "local" ? "bg-zinc-700 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+                  >Local</button>
+                  <button
+                    onClick={() => { setUploadSource("drive"); setUploadFolder(""); }}
+                    className={`text-xs px-3 py-1 rounded transition-colors ${uploadSource === "drive" ? "bg-blue-700 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+                  >Google Drive</button>
+                </div>
+
+                {uploadSource === "local" ? (
+                  <>
+                    <SearchSelect options={folders} value={uploadFolder} onChange={setUploadFolder} placeholder="Selecionar pasta..." disabled={busy} />
+                    {uploadFiles.length > 0 && (
+                      <div className="flex flex-col gap-0.5">
+                        <p className="text-xs text-zinc-500">{uploadFiles.length} vídeo(s):</p>
+                        {uploadFiles.map((f) => <p key={f.name} className="text-xs text-zinc-400 pl-2">• {f.name}</p>)}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <p className="text-xs text-zinc-500">A pasta precisa estar compartilhada como "Qualquer pessoa com o link".</p>
+                    <div className="flex gap-2">
+                      <input
+                        type="url"
+                        value={uploadDriveUrl}
+                        onChange={(e) => { setUploadDriveUrl(e.target.value); setUploadDrivePath(""); }}
+                        placeholder="https://drive.google.com/drive/folders/..."
+                        disabled={busy || uploadDriveDownloading}
+                        className="flex-1 text-xs bg-zinc-800 text-white px-3 py-2 rounded border border-zinc-700 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+                      />
+                      <button
+                        onClick={async () => {
+                          setUploadDriveDownloading(true);
+                          const p = await downloadDriveFolder(uploadDriveUrl);
+                          if (p) setUploadDrivePath(p);
+                          setUploadDriveDownloading(false);
+                        }}
+                        disabled={!uploadDriveUrl || uploadDriveDownloading || busy}
+                        className="text-xs px-3 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 whitespace-nowrap"
+                      >
+                        {uploadDriveDownloading ? "Baixando..." : uploadDrivePath ? "✓ Baixado" : "Baixar vídeos"}
+                      </button>
+                    </div>
                   </div>
                 )}
               </div>
@@ -558,21 +634,54 @@ export default function AdsPage() {
             </div>
           </div>
 
-          <div className="flex flex-col gap-1">
-            <label className="text-xs text-zinc-400">Pasta de criativos</label>
-            <SearchSelect
-              options={folders}
-              value={newCampaignFolder}
-              onChange={setNewCampaignFolder}
-              placeholder="Selecionar pasta..."
-              disabled={busy}
-            />
-            {newCampaignFiles.length > 0 && (
-              <div className="mt-1.5 flex flex-col gap-0.5">
-                <p className="text-xs text-zinc-500">{newCampaignFiles.length} vídeo(s):</p>
-                {newCampaignFiles.map((f) => (
-                  <p key={f.name} className="text-xs text-zinc-400 pl-2">• {f.name}</p>
-                ))}
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-1">
+              <label className="text-xs text-zinc-400 mr-2">Criativos:</label>
+              <button
+                onClick={() => { setNewCampaignSource("local"); setNewCampaignDrivePath(""); }}
+                className={`text-xs px-3 py-1 rounded transition-colors ${newCampaignSource === "local" ? "bg-zinc-700 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+              >Local</button>
+              <button
+                onClick={() => { setNewCampaignSource("drive"); setNewCampaignFolder(""); }}
+                className={`text-xs px-3 py-1 rounded transition-colors ${newCampaignSource === "drive" ? "bg-blue-700 text-white" : "text-zinc-500 hover:text-zinc-300"}`}
+              >Google Drive</button>
+            </div>
+
+            {newCampaignSource === "local" ? (
+              <>
+                <SearchSelect options={folders} value={newCampaignFolder} onChange={setNewCampaignFolder} placeholder="Selecionar pasta..." disabled={busy} />
+                {newCampaignFiles.length > 0 && (
+                  <div className="flex flex-col gap-0.5">
+                    <p className="text-xs text-zinc-500">{newCampaignFiles.length} vídeo(s):</p>
+                    {newCampaignFiles.map((f) => <p key={f.name} className="text-xs text-zinc-400 pl-2">• {f.name}</p>)}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <p className="text-xs text-zinc-500">A pasta precisa estar compartilhada como "Qualquer pessoa com o link".</p>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={newCampaignDriveUrl}
+                    onChange={(e) => { setNewCampaignDriveUrl(e.target.value); setNewCampaignDrivePath(""); }}
+                    placeholder="https://drive.google.com/drive/folders/..."
+                    disabled={busy || newCampaignDriveDownloading}
+                    className="flex-1 text-xs bg-zinc-800 text-white px-3 py-2 rounded border border-zinc-700 focus:outline-none focus:border-blue-500 disabled:opacity-50"
+                  />
+                  <button
+                    onClick={async () => {
+                      setNewCampaignDriveDownloading(true);
+                      const p = await downloadDriveFolder(newCampaignDriveUrl);
+                      if (p) setNewCampaignDrivePath(p);
+                      setNewCampaignDriveDownloading(false);
+                    }}
+                    disabled={!newCampaignDriveUrl || newCampaignDriveDownloading || busy}
+                    className="text-xs px-3 py-2 bg-blue-700 hover:bg-blue-600 text-white rounded transition-colors disabled:opacity-50 whitespace-nowrap"
+                  >
+                    {newCampaignDriveDownloading ? "Baixando..." : newCampaignDrivePath ? "✓ Baixado" : "Baixar vídeos"}
+                  </button>
+                </div>
               </div>
             )}
           </div>

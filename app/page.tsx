@@ -236,6 +236,9 @@ export default function Home() {
         <div className="flex items-center gap-4 text-sm text-zinc-400">
           {readyCount > 0 && <span className="text-yellow-400">{readyCount} para revisar</span>}
           {approvedCount > 0 && <span className="text-green-400">{approvedCount} aprovado(s)</span>}
+          <a href="/splitter" className="text-zinc-400 hover:text-white transition-colors border border-zinc-700 hover:border-zinc-500 px-3 py-1.5 rounded text-xs">
+            Recortar
+          </a>
           <a href="/content" className="text-zinc-400 hover:text-white transition-colors border border-zinc-700 hover:border-zinc-500 px-3 py-1.5 rounded text-xs">
             Conteúdo
           </a>

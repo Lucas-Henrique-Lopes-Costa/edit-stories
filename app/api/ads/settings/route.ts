@@ -15,12 +15,17 @@ export interface AdsSettings {
 }
 
 export function readSettings(): Partial<AdsSettings> {
-  if (!fs.existsSync(SETTINGS_FILE)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf-8"));
-  } catch {
-    return {};
-  }
+  const fromFile = (() => {
+    if (!fs.existsSync(SETTINGS_FILE)) return {};
+    try { return JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf-8")); } catch { return {}; }
+  })();
+
+  // Fall back to .env values when not set in the saved file
+  return {
+    accessToken: process.env.META_ACCESS_TOKEN || "",
+    adAccountId: process.env.META_AD_ACCOUNT_ID || "",
+    ...fromFile,
+  };
 }
 
 export async function GET() {

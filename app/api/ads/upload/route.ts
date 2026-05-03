@@ -181,7 +181,8 @@ export async function POST(req: NextRequest) {
         const UPLOADS_DIR = path.join(process.cwd(), "uploads");
         const EXPORTS_DIR = path.join(process.cwd(), "exports");
         let folderAbs: string;
-        if (folderPath === "__exports__") folderAbs = EXPORTS_DIR;
+        if (path.isAbsolute(folderPath)) folderAbs = folderPath; // Drive temp dir
+        else if (folderPath === "__exports__") folderAbs = EXPORTS_DIR;
         else if (folderPath === "__uploads__") folderAbs = UPLOADS_DIR;
         else folderAbs = path.join(UPLOADS_DIR, folderPath);
 
